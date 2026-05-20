@@ -180,20 +180,25 @@ if __name__ == "__main__":
     continuous_cols = ['x_3a', 'x_b1', 'x_7e', 'x_29', 'x_d4', 'x_5c', 'x_f8']
     binary_cols = ['x_06', 'x_92', 'x_4b']
 
-    scaler = RobustScaler(quantile_range=(10.0, 90.0))
-    #연속형 변수 스케일링 적용
-    X_train_cont = scaler.fit_transform(train_df[continuous_cols])
-    #이산형은 그대로 가져옴
+    robust_scaler = RobustScaler(quantile_range=(10.0, 90.0))
+    #MinMaxScaler()도 시도
+    minmax_scaler = MinMaxScaler()
+
+    # 1. Train 데이터: Robust로 먼저 깎고, 이어서 MinMax로 0~1 사이로 고정합니다.
+    X_train_cont = robust_scaler.fit_transform(train_df[continuous_cols])
+    X_train_cont = minmax_scaler.fit_transform(X_train_cont) # 연속으로 fit_transform 수행
     X_train_bin = train_df[binary_cols].to_numpy()
-    #두 배열을 하나의 데이터로 다시 합침
     X_train = np.hstack([X_train_cont, X_train_bin])
 
-    # val/test에도 같은 scaler로 transform 적용
-    X_val_cont = scaler.transform(val_df[continuous_cols])
+    # 2. Val 데이터: 데이터 누수 방지를 위해 transform만 연달아 적용합니다.
+    X_val_cont = robust_scaler.transform(val_df[continuous_cols])
+    X_val_cont = minmax_scaler.transform(X_val_cont)
     X_val_bin = val_df[binary_cols].to_numpy()
     X_val = np.hstack([X_val_cont, X_val_bin])
 
-    X_test_cont = scaler.transform(test_df[continuous_cols])
+    # 3. Test 데이터: 동일하게 적용합니다.
+    X_test_cont = robust_scaler.transform(test_df[continuous_cols])
+    X_test_cont = minmax_scaler.transform(X_test_cont)
     X_test_bin = test_df[binary_cols].to_numpy()
     X_test = np.hstack([X_test_cont, X_test_bin])
 
@@ -254,16 +259,19 @@ if __name__ == "__main__":
     model.fit(train_X)
     print("학습 완료")
 
-    # ---------- score 계산 ----------
-    # IsolationForest.score_samples는 "정상일수록 큰 값"을 반환하므로
-    # anomaly score로 쓰려면 부호를 뒤집음 (-)
+    # ---------- score 계산 및 [AUPR 향상 롤링 필터 적용] ----------
+    # IsolationForest.score_samples는 "정상일수록 큰 값"을 반환하므로 부호를 뒤집음 (-)
     val_window_scores  = -model.score_samples(val_X)
     test_window_scores = -model.score_samples(test_X)
 
-    # window score → timestep score 환산
+    # [★AUPR 치트키] 윈도우 스코어 자체의 순간적인 미세 잡음(오보) 제거하기
+    # window=3 이나 window=5 정도로 조절해가며 성능을 볼 수 있습니다. 우선 3으로 시작합니다!
+    val_window_scores = pd.Series(val_window_scores).rolling(window=3, min_periods=1).mean().to_numpy()
+    test_window_scores = pd.Series(test_window_scores).rolling(window=3, min_periods=1).mean().to_numpy()
+
+    # window score → timestep score 환산 (이 부분은 원래 스타터 코드 그대로입니다)
     val_scores  = windows_to_timestep_scores(val_window_scores,  len(val_df),  W, S)
     test_scores = windows_to_timestep_scores(test_window_scores, len(test_df), W, S)
-
     # ---------- 평가 ----------
     val_auroc  = roc_auc_score(val_labels,  val_scores)
     val_aupr   = average_precision_score(val_labels,  val_scores)
