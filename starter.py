@@ -177,7 +177,8 @@ if __name__ == "__main__":
     # ※ 개선 포인트: 연속형/이산형을 분리해서 다르게 처리, RobustScaler 시도, 등
     
     # 이산데이터와 연속 데이터 분리
-    continuous_cols = ['x_3a', 'x_b1', 'x_7e', 'x_29', 'x_d4', 'x_5c', 'x_f8']
+    # x_f8을 리스트에서 제외
+    continuous_cols = ['x_3a', 'x_b1', 'x_7e', 'x_29', 'x_d4', 'x_5c']
     binary_cols = ['x_06', 'x_92', 'x_4b']
 
     robust_scaler = RobustScaler(quantile_range=(10.0, 90.0))
