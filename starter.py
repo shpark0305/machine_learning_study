@@ -133,7 +133,7 @@ def windows_to_timestep_scores(window_scores, T, window_size, stride=1):
     Returns
     -------
     timestep_scores : np.ndarray, shape (T,)
-    """
+    
     timestep_scores = np.full(T, np.nan)
     n_windows = len(window_scores)
 
@@ -151,6 +151,32 @@ def windows_to_timestep_scores(window_scores, T, window_size, stride=1):
             timestep_scores[i] = timestep_scores[i - 1]
 
     return timestep_scores
+    """
+    timestep_scores_sum = np.zeros(T)
+    counts = np.zeros(T)
+    n_windows = len(window_scores)
+
+    for i in range(n_windows):
+        start_idx = i * stride
+        end_idx = start_idx + window_size
+        
+        # T를 넘어가는 예외 방지 
+        if end_idx > T:
+            end_idx = T
+
+        
+        # 해당 윈도우가 커버하는 모든 타임스텝에 점수를 누적
+        timestep_scores_sum[start_idx:end_idx] += window_scores[i]
+        counts[start_idx:end_idx] += 1
+
+    # 윈도우가 한 번도 지나가지 않은 곳(주로 맨 뒤 극소수)은 안전하게 처리
+    counts[counts == 0] = 1
+    
+    # 평균값 계산
+    timestep_scores = timestep_scores_sum / counts
+    
+    return timestep_scores
+    
 
 
 # ============================================================
@@ -178,11 +204,11 @@ if __name__ == "__main__":
     
     # 이산데이터와 연속 데이터 분리
     # x_f8을 리스트에서 제외
-    continuous_cols = ['x_3a', 'x_b1', 'x_7e', 'x_29', 'x_d4', 'x_5c']
     binary_cols = ['x_06', 'x_92', 'x_4b']
+    continuous_cols = [c for c in feature_cols if c not in binary_cols + ['x_f8']]
 
+    scaler_std    = StandardScaler()
     robust_scaler = RobustScaler(quantile_range=(10.0, 90.0))
-    #MinMaxScaler()도 시도
     minmax_scaler = MinMaxScaler()
 
     # 1. Train 데이터: Robust로 먼저 깎고, 이어서 MinMax로 0~1 사이로 고정합니다.
@@ -207,13 +233,30 @@ if __name__ == "__main__":
 
     # ---------- Sliding window ----------
     # ※ 개선 포인트: window 크기 튜닝, 통계 피처(mean/std/min/max) 추출, 등
-    W = 10   # window 크기
-    S = 1    # stride
+    W = 180   # window 크기
+    S_train = 33 #train은 학습속도 향상을 위해 staride를 따로 배정
+    S = 1    # stride for val/test
 
-    train_windows = make_windows(X_train, W, S)  # (N, W, D)
+    train_windows = make_windows(X_train, W, S_train)  # (N, W, D)
     val_windows   = make_windows(X_val,   W, S)
     test_windows  = make_windows(X_test,  W, S)
 
+    #평균값, 표준편차, 최소값, 최대값, 범위, 중앙값, 시작과 끝의 차이 등 다양한 통계량을 추출하여 모델에 제공
+    def extract_features(windows):
+        mean   = windows.mean(axis=1)
+        std    = windows.std(axis=1)
+        min_   = windows.min(axis=1)
+        max_   = windows.max(axis=1)
+        range_ = max_ - min_
+        median = np.median(windows, axis=1)
+        diff   = windows[:, -1, :] - windows[:, 0, :]
+        return np.concatenate([mean, std, min_, max_, range_, median, diff], axis=1)
+    
+    train_X = extract_features(train_windows)
+    val_X   = extract_features(val_windows)
+    test_X  = extract_features(test_windows)
+    
+    """
     # IsolationForest는 1D 입력을 기대하므로 (N, W, D) -> (N, W*D)로 flatten
     # ※ 개선 포인트: flatten 대신 window별 통계량 추출이 더 나을 수 있음
     #train 데이터에서 통계 피처 추출
@@ -240,6 +283,7 @@ if __name__ == "__main__":
     train_X = np.hstack([train_flat, train_stat])
     val_X   = np.hstack([val_flat, val_stat])
     test_X  = np.hstack([test_flat, test_stat])
+    """
 
     print(f"=== Sliding window (W={W}, stride={S}) ===")
     print(f"train_X: {train_X.shape}")
